@@ -1,0 +1,60 @@
+name: Crea GameDock Stream
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  stream:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepara il progetto
+        id: prep
+        run: |
+          ZIP=$(find . -iname "*.zip" -not -path "./.git/*" | head -1)
+          if [ -n "$ZIP" ]; then
+            echo "Trovato: $ZIP"
+            mkdir -p progetto && unzip -q -o "$ZIP" -d progetto
+          fi
+          P=$(find . -name patch_moonlight.py -not -path "./.git/*" | head -1)
+          if [ -z "$P" ]; then
+            echo "::error::Progetto non trovato. Carica GameDockStream.zip con Add file > Upload files."
+            exit 1
+          fi
+          echo "dir=$(cd "$(dirname "$P")" && pwd)" >> "$GITHUB_OUTPUT"
+
+      - name: Scarica Moonlight v12.2 (licenza GPLv3)
+        run: git clone --recursive --depth 1 --branch v12.2 https://github.com/moonlight-stream/moonlight-android.git moonlight
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Applica le modifiche di GameDock
+        run: python3 "${{ steps.prep.outputs.dir }}/patch_moonlight.py" moonlight "${{ steps.prep.outputs.dir }}"
+
+      - name: Strumenti Android
+        run: |
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "sdk.dir=$SDK" > moonlight/local.properties
+          SDKM=$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+          if [ -n "$SDKM" ]; then
+            yes | "$SDKM" --licenses > /dev/null || true
+            "$SDKM" "platforms;android-37" "ndk;29.0.14206865" > /dev/null || true
+          fi
+
+      - name: Compila GameDock Stream
+        working-directory: moonlight
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleNonRootDebug --no-daemon
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cp app/build/outputs/apk/nonRoot/debug/*.apk "$GITHUB_WORKSPACE/out/GameDock-Stream.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GameDock-Stream-APK
+          path: out/*.apk
